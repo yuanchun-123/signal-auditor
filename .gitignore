@@ -9,3 +9,5 @@ examples/reports/
 audit_report.html
 research/lazy_prices/data/
 research/lazy_prices/reports/
+research/agent_committee/data/
+research/agent_committee/runs/
