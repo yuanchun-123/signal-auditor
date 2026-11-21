@@ -24,11 +24,40 @@ FORMS = {"10-K", "10-K405"}
 START, END = "2010-01-01", "2026-11-01"
 
 
+def _frame(concept: str, period: str) -> pd.Series:
+    js = get(f"https://data.sec.gov/api/xbrl/frames/{concept}/USD/{period}.json").json()
+    d = pd.DataFrame(js["data"]).drop_duplicates("cik").set_index("cik")
+    return d["val"].rename(period)
+
+
 def universe() -> pd.DataFrame:
-    js = get("https://data.sec.gov/api/xbrl/frames/dei/EntityPublicFloat/USD/CY2011Q2I.json").json()
-    df = pd.DataFrame(js["data"]).rename(columns={"val": "public_float_2011"})
-    df = df.sort_values("public_float_2011", ascending=False).drop_duplicates("cik")
-    return df.head(N_FIRMS)[["cik", "entityName", "public_float_2011"]].reset_index(drop=True)
+    """Largest firms by public float, with guards against XBRL scaling errors.
+
+    Self-reported dei:EntityPublicFloat contains typos (e.g. 1e18, or values
+    1000x too large). We take the smaller of the 2010 and 2011 values -- a
+    one-year typo cannot inflate it -- and drop firms whose float exceeds 20x
+    total assets.
+    """
+    def year(concept: str, y: int) -> pd.Series:
+        # firms measure float on different dates (fiscal years differ): pool all quarters
+        out = pd.Series(dtype=float)
+        for q in (2, 1, 3, 4):
+            out = out.combine_first(_frame(concept, f"CY{y}Q{q}I"))
+        return out
+
+    f11 = year("dei/EntityPublicFloat", 2011).rename("f11")
+    f10 = year("dei/EntityPublicFloat", 2010).rename("f10")
+    assets = year("us-gaap/Assets", 2011).rename("assets")
+    names = pd.concat([pd.DataFrame(get(f"https://data.sec.gov/api/xbrl/frames/dei/EntityPublicFloat/"
+                                        f"USD/CY2011Q{q}I.json").json()["data"]) for q in (1, 2, 3, 4)])
+    names = names.drop_duplicates("cik").set_index("cik")
+    df = pd.concat([f11, f10, assets, names["entityName"]], axis=1, join="outer")
+    df.index.name = "cik"
+    df = df[df["f11"].notna()]
+    df["public_float_2011"] = df[["f11", "f10"]].min(axis=1)
+    ok = df["assets"].isna() | (df["public_float_2011"] <= 20 * df["assets"])
+    df = df[ok].sort_values("public_float_2011", ascending=False).head(N_FIRMS)
+    return df.reset_index()[["cik", "entityName", "public_float_2011", "f10", "f11", "assets"]]
 
 
 def _rows(block: dict) -> pd.DataFrame:
