@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "signal-auditor"
+version = "0.1.0"
+description = "Catch the usual ways a cross-sectional trading-signal backtest fools you."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.24", "pandas>=2.0", "scipy>=1.10", "matplotlib>=3.7"]
+
+[project.optional-dependencies]
+examples = ["requests>=2.28"]
+dev = ["pytest>=7"]
+
+[project.scripts]
+signal-auditor = "signal_auditor.__main__:main"
+
+[tool.setuptools]
+packages = ["signal_auditor"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
