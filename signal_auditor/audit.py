@@ -21,6 +21,7 @@ class AuditConfig:
     n_placebo: int = 500
     min_assets: int = 20
     universe_note: str | None = None  # e.g. "current S&P 500 constituents"
+    intended_assets: int | None = None  # size of the universe you meant to study
     factors: pd.DataFrame | None = field(default=None, repr=False)  # factor returns on panel calendar
     neutralize: list[str] | None = None  # panel columns of known characteristics (size, momentum...)
 
@@ -96,7 +97,7 @@ def audit(df: pd.DataFrame, name: str = "signal", config: AuditConfig | None = N
     results = [
         C.check_timestamps(df),
         C.check_coverage(df, cfg.min_assets),
-        C.check_universe(df, cfg.universe_note),
+        C.check_universe(df, cfg.universe_note, cfg.intended_assets),
         C.check_lag_decay(df, h),
         C.check_ic_significance(df, h, cfg.n_trials),
         C.check_placebo(df, cfg.n_placebo),

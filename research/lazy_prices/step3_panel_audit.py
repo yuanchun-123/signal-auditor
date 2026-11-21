@@ -100,8 +100,18 @@ def signal_panel(sims: pd.DataFrame, dates: pd.DatetimeIndex, date_col: str,
                  measure: str) -> pd.DataFrame:
     """For each month-end, the latest filing dated (by ``date_col``) on or before it."""
     s = sims.dropna(subset=[measure]).copy()
-    s["known"] = pd.to_datetime(s[date_col]).dt.tz_localize(None).dt.normalize()
-    s["available_at"] = pd.to_datetime(s["acceptanceDateTime"]).dt.tz_localize(None)
+    # acceptanceDateTime is UTC (EDGAR accepts 06:00-22:00 US Eastern; the UTC hours
+    # cluster at 20-22, i.e. just after the 16:00 ET close). Convert to Eastern time.
+    # Panel dates are month-end closes, so "available" means tradeable at that day's
+    # close: a filing accepted at or after 16:00 ET becomes usable the next day.
+    acc = (pd.to_datetime(s["acceptanceDateTime"], utc=True)
+           .dt.tz_convert("America/New_York").dt.tz_localize(None))
+    tradeable = acc.dt.normalize() + pd.to_timedelta((acc.dt.hour >= 16).astype(int), unit="D")
+    s["available_at"] = tradeable
+    if date_col == "acceptanceDateTime":
+        s["known"] = tradeable
+    else:
+        s["known"] = pd.to_datetime(s[date_col]).dt.normalize()
     s = s.sort_values("known")
     grid = pd.DataFrame({"date": dates}).sort_values("date")
     out = []
@@ -164,7 +174,7 @@ def main() -> None:
         panel = panel.dropna(subset=controls)
         name = f"Lazy Prices: {measure} ({label} dating)"
         rep = audit(panel, name=name, horizon=1, periods_per_year=12, n_trials=trials,
-                    cost_bps=10, factors=factors, neutralize=controls,
+                    cost_bps=10, factors=factors, neutralize=controls, intended_assets=len(uni),
                     universe_note="top 500 by 2011 public float; firms without a current "
                                   "ticker lack prices")
         path = REPORTS / f"lazy_prices_{measure}_{label}.html"

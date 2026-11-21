@@ -75,8 +75,15 @@ def check_coverage(df: pd.DataFrame, min_assets: int = 20) -> CheckResult:
     return CheckResult(name, PASS, f"{sizes.size} dates, median {sizes.median():.0f} assets per date.", det)
 
 
-def check_universe(df: pd.DataFrame, universe_note: str | None = None) -> CheckResult:
-    """Flag survivorship bias: a universe in which no asset ever disappears is suspicious."""
+def check_universe(df: pd.DataFrame, universe_note: str | None = None,
+                   intended_assets: int | None = None) -> CheckResult:
+    """Flag survivorship bias.
+
+    Two symptoms: (a) no asset ever leaves the sample, (b) far fewer assets reach
+    the panel than the universe you meant to study (``intended_assets``) -- e.g.
+    delisted firms silently dropped because a price source only covers survivors.
+    The auditor cannot see firms that never entered the panel unless told.
+    """
     name = "Universe / survivorship"
     last_seen = df.groupby("asset")["date"].max()
     final = df["date"].max()
@@ -84,11 +91,19 @@ def check_universe(df: pd.DataFrame, universe_note: str | None = None) -> CheckR
     det = {"assets": int(last_seen.size), "assets_that_exit": exits}
     if universe_note:
         det["note"] = universe_note
+    problems = []
+    if intended_assets:
+        cov = last_seen.size / intended_assets
+        det["intended_assets"], det["coverage"] = intended_assets, cov
+        if cov < 0.9:
+            problems.append(f"only {last_seen.size} of {intended_assets} intended assets "
+                            f"({cov:.0%}) reach the panel; if the missing ones are delisted or "
+                            "acquired firms, results carry survivorship bias")
     if exits == 0 and last_seen.size >= 20:
-        return CheckResult(
-            name, WARN,
-            "No asset ever leaves the sample. If the universe is today's constituents, "
-            "results carry survivorship bias (delisted losers are missing).", det)
+        problems.append("no asset ever leaves the sample; if the universe is today's "
+                        "constituents, delisted losers are missing")
+    if problems:
+        return CheckResult(name, WARN, "; ".join(problems).capitalize() + ".", det)
     return CheckResult(name, PASS, f"{exits} of {last_seen.size} assets exit before the end of the sample.", det)
 
 
@@ -246,6 +261,10 @@ def check_costs(df: pd.DataFrame, horizon: int, periods_per_year: float,
            "net_sharpe": M.sharpe(net, ann), "avg_one_way_turnover": float(avg_to),
            "gross_ann_return": float(bt["gross"].mean() * ann), "net_ann_return": float(net.mean() * ann),
            "cost_bps_assumed": cost_bps, "breakeven_cost_bps": float(breakeven)}
+    if bt["gross"].mean() <= 0:
+        return CheckResult(name, FAIL, f"The long-short spread is negative before costs "
+                           f"({det['gross_ann_return']:+.2%}/yr): no edge to protect. "
+                           "Check the signal's sign convention.", det)
     if breakeven < cost_bps:
         return CheckResult(name, FAIL, f"Break-even cost is {breakeven:.1f} bps, below the assumed "
                            f"{cost_bps:.0f} bps: the edge is eaten by trading.", det)

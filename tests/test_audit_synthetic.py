@@ -67,3 +67,16 @@ def test_forward_returns_and_to_long():
     assert fwd.loc["2020-01-02", "B"] == pytest.approx(-0.5)
     long = to_long(prices, fwd)
     assert len(long) == 4  # last date has no forward return
+
+
+def test_universe_coverage_warns(panels):
+    rep = run(panels["true"], intended_assets=1000, n_placebo=50)
+    assert rep.status_of("Universe") == "WARN"
+
+
+def test_negative_spread_fails_costs(panels):
+    flipped = panels["true"].assign(signal=lambda d: -d["signal"])
+    rep = run(flipped, n_placebo=50)
+    assert rep.status_of("Transaction costs") == FAIL
+    assert "negative before costs" in next(r.summary for r in rep.results
+                                           if r.name == "Transaction costs")

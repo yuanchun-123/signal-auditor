@@ -51,7 +51,7 @@ The exit code is 1 when the verdict is `NOT SUPPORTED`, so the audit can gate a 
 |---|---|---|---|
 | 1 | Point-in-time timestamps | Look-ahead bias | Every `available_at` must be ≤ the trade date |
 | 2 | Cross-sectional coverage | Noisy quantiles from thin cross-sections | Assets per date |
-| 3 | Universe / survivorship | Hindsight universes (delisted losers missing) | Flags samples in which no asset ever exits |
+| 3 | Universe / survivorship | Hindsight universes (delisted losers missing) | Flags samples in which no asset ever exits, or that cover too little of `intended_assets` |
 | 4 | One-period-delay test | Leakage without timestamps | Delay the signal one period; a strong IC that collapses to ~0 is a leakage signature |
 | 5 | IC significance | Overstated t-stats; data snooping | Rank IC with Newey-West errors (lags ≥ horizon − 1); bar = max(3, Bonferroni for `n_trials`), following Harvey, Liu & Zhu (2016) |
 | 6 | Placebo | Pure chance | Within-date permutation of the signal, vectorised |
@@ -93,6 +93,13 @@ honest `n_trials` makes the multiple-testing checks bite.
 universe as survivorship-biased and finds no reliable predictive power in this small
 universe (Newey-West t ≈ 1), so the factor-spanning check reports itself uninformative. That is the expected outcome; it is not evidence about
 momentum in general.
+
+## Research using it
+
+[`research/lazy_prices/`](research/lazy_prices/) replicates Cohen, Malloy & Nguyen's
+*Lazy Prices* on free SEC EDGAR and Yahoo data. The audit caught fiscal-year-end
+look-ahead, after-close filings, a time-zone error, and survivorship from free price
+data. Results and pipeline are in that folder's README.
 
 ## Panel format
 
