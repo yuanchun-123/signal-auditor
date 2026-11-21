@@ -18,12 +18,21 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--trials", type=int, default=1, help="number of signal variants tried")
     ap.add_argument("--cost-bps", type=float, default=10.0, help="one-way trading cost in bps")
     ap.add_argument("--quantiles", type=int, default=5)
+    ap.add_argument("--french", choices=["M", "D"], default=None,
+                    help="add the factor-spanning check against Fama-French 5 + momentum (monthly/daily)")
+    ap.add_argument("--neutralize", nargs="*", default=None,
+                    help="panel columns of known characteristics to neutralise the signal against")
     ap.add_argument("--out", default="audit_report.html")
     a = ap.parse_args(argv)
 
     df = pd.read_parquet(a.panel) if a.panel.endswith(".parquet") else pd.read_csv(a.panel)
+    factors = None
+    if a.french:
+        from .factors import load_french
+        factors = load_french(a.french).drop(columns="RF")
     rep = audit(df, name=a.name or a.panel, horizon=a.horizon, periods_per_year=a.ppy,
-                n_trials=a.trials, cost_bps=a.cost_bps, n_quantiles=a.quantiles)
+                n_trials=a.trials, cost_bps=a.cost_bps, n_quantiles=a.quantiles,
+                factors=factors, neutralize=a.neutralize)
     rep.to_html(a.out)
     print(rep.to_markdown())
     print(f"HTML report written to {a.out}")

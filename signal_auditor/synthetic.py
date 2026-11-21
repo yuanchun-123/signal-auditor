@@ -91,3 +91,35 @@ def make_synthetic(n_dates: int = 240, n_assets: int = 300, ic: float = 0.03,
         "mined": _long(dates, assets, mined_sig, ret, alive),
         "stale_timestamp": stale,
     }
+
+
+def make_factor_case(n_dates: int = 240, n_assets: int = 300, ic: float = 0.03,
+                     seed: int = 3) -> tuple[dict[str, pd.DataFrame], pd.DataFrame]:
+    """Two signals in a market with one priced characteristic ``char`` (think: size).
+
+    * ``disguised`` -- a noisy copy of ``char``. It predicts returns only because
+      ``char`` loads on a factor with a positive premium.
+    * ``genuine``   -- independent of ``char``; carries real alpha on top of the factor.
+
+    Returns ``(panels, factors)`` where ``factors`` has one column ``F`` stamped at
+    the end of the period over which it was earned (the panel's convention).
+    """
+    rng = np.random.default_rng(seed)
+    dates = pd.date_range("2005-01-31", periods=n_dates + 1, freq="ME")
+    assets = np.array([f"A{i:04d}" for i in range(n_assets)])
+    char = _ar1(rng, n_dates, n_assets, rho=0.95)
+    alpha_sig = _ar1(rng, n_dates, n_assets, rho=0.9)
+    f = 0.01 + 0.03 * rng.standard_normal(n_dates)          # earned over (D[i], D[i+1]]
+    noise = 0.08 * rng.standard_normal((n_dates, n_assets))
+    beta = ic * 0.08 / np.sqrt(1 - ic**2)
+    ret = 0.5 * char * f[:, None] + beta * alpha_sig + noise
+    alive = np.ones((n_dates, n_assets), dtype=bool)  # universe effects are not the point here
+
+    def panel(sig):
+        df = _long(dates[:-1], assets, sig, ret, alive)
+        df["char"] = char.ravel()[alive.ravel()]
+        return df
+
+    disguised = char + 0.3 * rng.standard_normal(char.shape)
+    factors = pd.DataFrame({"F": f}, index=dates[1:])
+    return {"disguised": panel(disguised), "genuine": panel(alpha_sig)}, factors

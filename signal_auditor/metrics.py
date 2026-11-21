@@ -162,3 +162,35 @@ def deflated_sharpe_ratio(
 def bonferroni_t_threshold(n_trials: int, alpha: float = 0.05) -> float:
     """Two-sided |t| needed for family-wise significance after ``n_trials`` tests."""
     return float(stats.norm.ppf(1.0 - alpha / (2.0 * max(n_trials, 1))))
+
+
+# --------------------------------------------------------------------------- #
+# Regression with HAC errors
+# --------------------------------------------------------------------------- #
+def ols_newey_west(y: np.ndarray, X: np.ndarray, lags: int) -> dict:
+    """OLS of ``y`` on ``X`` (include a constant column yourself) with Newey-West SEs.
+
+    Returns ``{"coef", "se", "t", "r2", "n"}``. With ``lags=0`` the covariance is
+    White's heteroskedasticity-robust (HC0) estimator.
+    """
+    y = np.asarray(y, dtype=float)
+    X = np.asarray(X, dtype=float)
+    ok = ~(np.isnan(y) | np.isnan(X).any(axis=1))
+    y, X = y[ok], X[ok]
+    n, k = X.shape
+    if n <= k:
+        nan = np.full(k, np.nan)
+        return {"coef": nan, "se": nan, "t": nan, "r2": float("nan"), "n": n}
+    xtx_inv = np.linalg.inv(X.T @ X)
+    beta = xtx_inv @ X.T @ y
+    e = y - X @ beta
+    u = X * e[:, None]
+    s = u.T @ u
+    for lag in range(1, max(0, min(int(lags), n - 1)) + 1):
+        w = 1.0 - lag / (lags + 1.0)
+        g = u[lag:].T @ u[:-lag]
+        s += w * (g + g.T)
+    cov = xtx_inv @ s @ xtx_inv
+    se = np.sqrt(np.diag(cov))
+    r2 = 1.0 - (e @ e) / ((y - y.mean()) @ (y - y.mean())) if n > 1 else float("nan")
+    return {"coef": beta, "se": se, "t": beta / se, "r2": float(r2), "n": int(n)}

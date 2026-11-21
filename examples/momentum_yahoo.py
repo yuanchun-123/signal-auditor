@@ -17,6 +17,7 @@ import pandas as pd
 import requests
 
 from signal_auditor import audit, forward_returns, to_long
+from signal_auditor.factors import load_french
 
 TICKERS = """AAPL MSFT AMZN GOOGL META NVDA JPM BAC WFC C GS MS XOM CVX COP JNJ PFE MRK ABT
 LLY UNH PG KO PEP WMT HD LOW MCD NKE SBUX DIS CMCSA VZ T INTC CSCO ORCL IBM QCOM TXN
@@ -59,9 +60,11 @@ def main() -> None:
     # 12-1 momentum: return from t-12 to t-1, skipping the most recent month
     mom = prices.shift(1) / prices.shift(12) - 1.0
     panel = to_long(mom, forward_returns(prices, 1))
+    factors = load_french("M", cache_dir=HERE / "data").drop(columns="RF")
     rep = audit(panel, name="12-1 momentum, 61 current US large caps", horizon=1,
                 periods_per_year=12, n_trials=1, cost_bps=5, min_assets=20,
-                universe_note="hand-picked current large caps (hindsight universe)")
+                universe_note="hand-picked current large caps (hindsight universe)",
+                factors=factors)
     out = HERE / "reports" / "momentum_yahoo.html"
     out.parent.mkdir(exist_ok=True)
     rep.to_html(str(out))

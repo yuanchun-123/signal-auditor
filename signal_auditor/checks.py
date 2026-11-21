@@ -18,6 +18,7 @@ import numpy as np
 import pandas as pd
 
 from . import metrics as M
+from .factors import align_to_rebalances
 from .panel import cross_section_sizes, lag_signal
 
 PASS, WARN, FAIL = "PASS", "WARN", "FAIL"
@@ -273,3 +274,92 @@ def check_deflated_sharpe(df: pd.DataFrame, horizon: int, n_trials: int,
     tail = (f"consistent with the luckiest of {n_trials} skill-less trials"
             if n_trials > 1 else "the Sharpe ratio is not reliably above zero")
     return CheckResult(name, FAIL, f"DSR = {dsr:.2f}: {tail} ({ctx}).", det)
+
+
+# --------------------------------------------------------------------------- #
+# 5. Is it just a known factor?
+# --------------------------------------------------------------------------- #
+def check_factor_spanning(df: pd.DataFrame, factors: pd.DataFrame, horizon: int,
+                          n_quantiles: int = 5, alpha_t_bar: float = 2.0) -> CheckResult:
+    """Regress the long-short return on known factor returns; does an intercept survive?
+
+    ``factors`` holds factor returns indexed by the panel's calendar (e.g. month-end
+    dates for a monthly panel), excluding the risk-free rate. The long-short
+    portfolio is zero-investment, so it is regressed on the factors directly.
+    """
+    name = "Factor spanning (time-series alpha)"
+    bt = long_short_backtest(df, horizon, n_quantiles)
+    cal = pd.DatetimeIndex(np.sort(df["date"].unique()))
+    F = align_to_rebalances(factors, cal, bt.index, horizon)
+    y = bt["gross"].to_numpy()
+    ok = F.notna().all(axis=1).to_numpy()
+    coverage = float(ok.mean())
+    if ok.sum() < 24:
+        return CheckResult(name, WARN, f"Factor data cover only {ok.sum()} rebalances "
+                           "(need 24+); check that factor dates match the panel calendar.",
+                           {"coverage": coverage})
+    lags = M.default_nw_lags(int(ok.sum()), 1)
+    raw = M.ols_newey_west(y[ok], np.ones((ok.sum(), 1)), lags)
+    X = np.column_stack([np.ones(ok.sum()), F.to_numpy()[ok]])
+    fit = M.ols_newey_west(y[ok], X, lags)
+    names = ["alpha"] + list(F.columns)
+    loadings = {n: {"coef": float(c), "t": float(t)} for n, c, t in zip(names, fit["coef"], fit["t"])}
+    a, ta, traw = float(fit["coef"][0]), float(fit["t"][0]), float(raw["t"][0])
+    det = {"raw_mean": float(raw["coef"][0]), "raw_t": traw, "alpha": a, "alpha_t": ta,
+           "r2": fit["r2"], "n": fit["n"], "coverage": coverage, "nw_lags": lags,
+           "loadings": loadings}
+    big = sorted(((abs(v["t"]), k) for k, v in loadings.items() if k != "alpha"), reverse=True)[:2]
+    top = ", ".join(f"{k} (t={loadings[k]['t']:+.1f})" for _, k in big)
+    if abs(ta) >= alpha_t_bar:
+        return CheckResult(name, PASS, f"Alpha {a * 1e4:+.1f} bps/period survives the factors "
+                           f"(t = {ta:.2f}, R² = {fit['r2']:.2f}).", det)
+    if abs(traw) >= alpha_t_bar:
+        return CheckResult(name, FAIL, f"Raw spread is significant (t = {traw:.2f}) but alpha is not "
+                           f"(t = {ta:.2f}): explained by known factors, mainly {top}.", det)
+    return CheckResult(name, WARN, f"Neither the raw spread (t = {traw:.2f}) nor alpha (t = {ta:.2f}) "
+                       "is significant, so the spanning test is uninformative.", det)
+
+
+def neutralize_signal(df: pd.DataFrame, exposures: list[str]) -> pd.DataFrame:
+    """Replace ``signal`` by its residual from a per-date OLS on ``exposures`` (+ intercept)."""
+    cols = ["signal"] + list(exposures)
+    out = df.dropna(subset=cols + ["fwd_ret"]).sort_values("date", kind="stable").reset_index(drop=True)
+    resid = np.full(len(out), np.nan)
+    pos = 0
+    for _, g in out.groupby("date", sort=True):
+        n = len(g)
+        X = np.column_stack([np.ones(n), g[list(exposures)].to_numpy(dtype=float)])
+        y = g["signal"].to_numpy(dtype=float)
+        if n > X.shape[1] + 2:
+            beta, *_ = np.linalg.lstsq(X, y, rcond=None)
+            resid[pos:pos + n] = y - X @ beta
+        pos += n
+    out["signal"] = resid
+    return out.dropna(subset=["signal"])
+
+
+def check_neutralized_ic(df: pd.DataFrame, exposures: list[str], horizon: int) -> CheckResult:
+    """How much of the IC is left after removing known characteristics from the signal?"""
+    name = "Characteristic-neutral IC"
+    missing = [c for c in exposures if c not in df.columns]
+    if missing:
+        return CheckResult(name, WARN, f"Exposure columns not in panel: {missing}.")
+    base = df.dropna(subset=["signal", "fwd_ret"] + list(exposures)).sort_values("date", kind="stable")
+    ic_raw = M.ic_series(base)
+    neu = neutralize_signal(base, exposures)
+    ic_neu = M.ic_series(neu)
+    lags = M.default_nw_lags(ic_neu.size, horizon)
+    t_neu = M.newey_west_t(ic_neu.values, lags)
+    r_raw, r_neu = float(ic_raw.mean()), float(ic_neu.mean())
+    kept = r_neu / r_raw if abs(r_raw) > 1e-12 else float("nan")
+    det = {"exposures": list(exposures), "rank_ic_raw": r_raw, "rank_ic_neutral": r_neu,
+           "retained_share": kept, "t_neutral": float(t_neu), "nw_lags": lags}
+    lbl = ", ".join(exposures)
+    if np.isfinite(kept) and kept >= 0.5 and abs(t_neu) >= 2:
+        return CheckResult(name, PASS, f"After neutralising {lbl}, IC keeps {kept:.0%} "
+                           f"({r_raw:.3f} → {r_neu:.3f}, t = {t_neu:.2f}).", det)
+    if np.isfinite(kept) and kept >= 0.2:
+        return CheckResult(name, WARN, f"After neutralising {lbl}, IC keeps {kept:.0%} "
+                           f"({r_raw:.3f} → {r_neu:.3f}, t = {t_neu:.2f}).", det)
+    return CheckResult(name, FAIL, f"After neutralising {lbl}, IC falls from {r_raw:.3f} to "
+                       f"{r_neu:.3f} (t = {t_neu:.2f}): the signal is mostly a known characteristic.", det)

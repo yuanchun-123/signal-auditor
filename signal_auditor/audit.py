@@ -21,6 +21,8 @@ class AuditConfig:
     n_placebo: int = 500
     min_assets: int = 20
     universe_note: str | None = None  # e.g. "current S&P 500 constituents"
+    factors: pd.DataFrame | None = field(default=None, repr=False)  # factor returns on panel calendar
+    neutralize: list[str] | None = None  # panel columns of known characteristics (size, momentum...)
 
 
 @dataclass
@@ -58,7 +60,9 @@ class AuditReport:
                              for r in self.results])
 
     def to_dict(self) -> dict:
-        return {"name": self.name, "verdict": self.verdict, "config": asdict(self.config),
+        cfg = {k: v for k, v in vars(self.config).items() if k != "factors"}
+        cfg["factors"] = None if self.config.factors is None else list(self.config.factors.columns)
+        return {"name": self.name, "verdict": self.verdict, "config": cfg,
                 "results": [asdict(r) for r in self.results]}
 
     def to_markdown(self) -> str:
@@ -101,6 +105,10 @@ def audit(df: pd.DataFrame, name: str = "signal", config: AuditConfig | None = N
         C.check_costs(df, h, cfg.periods_per_year, cfg.cost_bps, q),
         C.check_deflated_sharpe(df, h, cfg.n_trials, q),
     ]
+    if cfg.factors is not None:
+        results.append(C.check_factor_spanning(df, cfg.factors, h, q))
+    if cfg.neutralize:
+        results.append(C.check_neutralized_ic(df, cfg.neutralize, h))
     bt = C.long_short_backtest(df, h, q)
     bt["net"] = bt["gross"] - bt["turnover"] * cfg.cost_bps / 1e4
     return AuditReport(name=name, config=cfg, results=results, ic=M.ic_series(df),
