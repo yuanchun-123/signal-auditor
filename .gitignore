@@ -7,3 +7,5 @@ dist/
 examples/data/
 examples/reports/
 audit_report.html
+research/lazy_prices/data/
+research/lazy_prices/reports/
